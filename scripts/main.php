@@ -49,6 +49,13 @@ class MainWindow extends QWidget {
             $this->dm->append($urls);
         };
         
+        $free = new QPushButton($this);
+        $free->text = 'Delete';
+        $free->onClicked = function() {
+            qDebug('Delete');
+            $this->dm = null;
+        };
+        
         $this->p = new QProgressBar($this);
         
         $this->progress = new QLabel($this);
@@ -89,7 +96,7 @@ class MainWindow extends QWidget {
         $this->p->setMaximum($total);
         $this->p->setValue($received);
         $this->m->text = memory_get_usage();
-        unset($received, $total, $speed, $unit);
+        unset($sender, $received, $total, $speed, $unit);
     }
     
     public function finished() {

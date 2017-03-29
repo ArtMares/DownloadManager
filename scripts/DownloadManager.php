@@ -41,10 +41,9 @@ class DownloadManager extends QObject {
     
     public function __construct($parent = null) {
         parent::__construct($parent);
-        $this->manager = new QNetworkAccessManager();
+        $this->manager = new QNetworkAccessManager($this);
         $this->queue = new Queue();
         $this->time = new QTime();
-        $this->output = new QFile();
         $this->path = \QStandardPaths::writableLocation(\QStandardPaths::HomeLocation).'/DownloadManager/';
         $dir = new QDir($this->path);
         if(!$dir->exists()) $dir->mkpath($this->path);
@@ -113,8 +112,9 @@ class DownloadManager extends QObject {
             }
             $url = $this->queue->get();
             $filename = $this->tmpFileName($url);
-            $this->output->setFileName($filename);
-            if (!$this->output->open(QIODevice::WriteOnly)) {
+            $file = new QFile();
+            $file->setFileName($filename);
+            if(!$file->open(QIODevice::WriteOnly)) {
                 $this->emit('error(string)', ['Problem opening save file ' . $filename . ' : ' . $this->output->errorString()]);
                 $this->startNextDownload();
                 return;
@@ -123,9 +123,40 @@ class DownloadManager extends QObject {
             $request->setSslConfiguration(QSslConfiguration::defaultConfiguration());
             $this->state = self::Download;
             $this->current = $this->manager->get($request);
-            $this->current->connect(SIGNAL('downloadProgress(int,int)'), $this, SLOT('downloadProgress(int,int)'));
-            $this->current->connect(SIGNAL('finished()'), $this, SLOT('downloadFinished()'));
-            $this->current->connect(SIGNAL('readyRead()'), $this, SLOT('downloadReadyRead()'));
+            $this->current->onDownloadProgress = function($sender, $bytesReceived, $bytesTotal) {
+                $speed = $bytesReceived * 1000 / $this->time->elapsed();
+                $this->emit('currentProgress(int,int,double)', [$bytesReceived, $bytesTotal, $speed]);
+            };
+            $this->current->onFinished = function($sender) use($file) {
+                $file->close();
+                $error = $sender->error();
+                if($error) {
+                    $this->emit('error(string)', ['Failed: '. $this->current->errorString()]);
+                } else {
+                    if($error == QNetworkReply::NoError) {
+//                        $file->write($sender->readAll())
+                        $statusCode = $sender->attribute(QNetworkRequest::HttpStatusCodeAttribute)->toInt();
+                        if($statusCode === 301 || $statusCode === 302) {
+                            $redirect = $sender->attribute(QNetworkRequest::RedirectionTargetAttribute)->toUrl();
+                            if(!$redirect->isEmpty()) {
+                                $this->append($redirect);
+                            }
+                        }
+                    }
+                    $this->count++;
+                }
+                $this->current->deleteLater();
+                $this->state = self::Stopped;
+//                $this->manager->clearAccessCache();
+                $this->startNextDownload();
+            };
+            $this->current->onReadyRead = function($sender) use(&$file) {
+                $data = $sender->readAll();
+                $file->write($data);
+            };
+//            $this->current->connect(SIGNAL('downloadProgress(int,int)'), $this, SLOT('downloadProgress(int,int)'));
+//            $this->current->connect(SIGNAL('finished()'), $this, SLOT('downloadFinished()'));
+//            $this->current->connect(SIGNAL('readyRead()'), $this, SLOT('downloadReadyRead()'));
             $this->time->start();
         }
     }
@@ -133,7 +164,7 @@ class DownloadManager extends QObject {
     public function downloadProgress($sender, $bytesReceived, $bytesTotal) {
         $speed = $bytesReceived * 1000 / $this->time->elapsed();
         $this->emit('currentProgress(int,int,double)', [$bytesReceived, $bytesTotal, $speed]);
-        unset($bytesReceived, $bytesTotal, $speed);
+        unset($sender, $bytesReceived, $bytesTotal, $speed);
     }
     
     public function downloadFinished() {
@@ -160,7 +191,9 @@ class DownloadManager extends QObject {
     }
     
     public function downloadReadyRead() {
-        $this->output->write($this->current->readAll());
-        $this->output->flush();
+        $this->output->open(QIODevice::WriteOnly);
+        $data = $this->current->readAll();
+        $this->output->write($data);
+        $this->output->close();
     }
 }
